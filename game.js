@@ -50,7 +50,6 @@ class ChessScene extends Phaser.Scene {
             ['P','P','P','P','P','P','P','P'],
             ['R','N','B','Q','K','B','N','R']
         ];
-        const pieceColors = ['w','b'];
         for (let row = 0; row < 8; row++) {
             for (let col = 0; col < 8; col++) {
                 const type = initialSetup[row][col];
@@ -87,6 +86,11 @@ class ChessScene extends Phaser.Scene {
             this.chordLoop.start(0);
             Tone.Transport.start();
         });
+
+        // ----- Drag Handlers -----
+        this.input.on('dragstart', this.onPieceDragStart, this);
+        this.input.on('drag', this.onPieceDrag, this);
+        this.input.on('dragend', this.onPieceDragEnd, this);
     }
 
     createPiece(row, col, type, color) {
@@ -103,6 +107,9 @@ class ChessScene extends Phaser.Scene {
         piece.setData('col', col);
         piece.setData('type', type);
         piece.setData('color', color);
+        // Enable dragging
+        this.input.setDraggable(piece);
+        // Keep click selection for those who prefer click‑click moves
         piece.on('pointerdown', this.onPieceDown, this);
         this.board[row][col].piece = piece;
     }
@@ -122,35 +129,78 @@ class ChessScene extends Phaser.Scene {
         const targetSquare = event.currentTarget;
         const targetRow = targetSquare.row;
         const targetCol = targetSquare.col;
-        const srcRow = this.selectedPiece.getData('row');
-        const srcCol = this.selectedPiece.getData('col');
-        // Simple move validation: allow move to any square (including captures)
-        // Capture if opponent piece present
-        const destCell = this.board[targetRow][targetCol];
-        if (destCell.piece && destCell.piece.getData('color') === this.turn) {
-            // Cannot capture own piece
-            this.selectedPiece = null;
+        this.attemptMove(this.selectedPiece, targetRow, targetCol);
+        this.selectedPiece = null;
+    }
+
+    // ----- Drag Callbacks -----
+    onPieceDragStart(pointer, gameObject) {
+        // Only allow dragging of the piece whose turn it is
+        if (gameObject.getData('color') !== this.turn) {
             return;
         }
-        // Remove captured piece
+        this.selectedPiece = gameObject;
+        this.children.bringToTop(gameObject);
+    }
+
+    onPieceDrag(pointer, gameObject, dragX, dragY) {
+        // Follow the pointer while dragging
+        gameObject.x = dragX;
+        gameObject.y = dragY;
+    }
+
+    onPieceDragEnd(pointer, gameObject) {
+        if (!this.selectedPiece) return;
+        // Determine which board square the pointer landed on
+        const boardX = pointer.x - this.boardOffsetX;
+        const boardY = pointer.y - this.boardOffsetY;
+        const targetCol = Math.floor(boardX / this.squareSize);
+        const targetRow = Math.floor(boardY / this.squareSize);
+        // Validate coordinates
+        if (targetRow >= 0 && targetRow < 8 && targetCol >= 0 && targetCol < 8) {
+            this.attemptMove(this.selectedPiece, targetRow, targetCol);
+        } else {
+            // Return piece to its original square
+            const origRow = this.selectedPiece.getData('row');
+            const origCol = this.selectedPiece.getData('col');
+            const origX = this.boardOffsetX + origCol * this.squareSize + this.squareSize / 2;
+            const origY = this.boardOffsetY + origRow * this.squareSize + this.squareSize / 2;
+            this.selectedPiece.setPosition(origX, origY);
+        }
+        this.selectedPiece = null;
+    }
+
+    // Centralised move logic (used by click‑click and drag)
+    attemptMove(piece, targetRow, targetCol) {
+        const srcRow = piece.getData('row');
+        const srcCol = piece.getData('col');
+        const destCell = this.board[targetRow][targetCol];
+        // Disallow moving onto a friendly piece
+        if (destCell.piece && destCell.piece.getData('color') === this.turn) {
+            // Snap back to original square
+            const origX = this.boardOffsetX + srcCol * this.squareSize + this.squareSize / 2;
+            const origY = this.boardOffsetY + srcRow * this.squareSize + this.squareSize / 2;
+            piece.setPosition(origX, origY);
+            return;
+        }
+        // Capture opponent piece if present
         if (destCell.piece) {
             destCell.piece.destroy();
         }
         // Update board data structures
         this.board[srcRow][srcCol].piece = null;
-        destCell.piece = this.selectedPiece;
-        // Snap piece to square center
+        destCell.piece = piece;
+        // Snap piece to the centre of the destination square
         const newX = this.boardOffsetX + targetCol * this.squareSize + this.squareSize / 2;
         const newY = this.boardOffsetY + targetRow * this.squareSize + this.squareSize / 2;
-        this.selectedPiece.setPosition(newX, newY);
-        this.selectedPiece.setData('row', targetRow);
-        this.selectedPiece.setData('col', targetCol);
+        piece.setPosition(newX, newY);
+        piece.setData('row', targetRow);
+        piece.setData('col', targetCol);
         // Play move sound
         this.moveSynth.triggerAttackRelease('C4', '8n');
         // Switch turn
         this.turn = this.turn === 'w' ? 'b' : 'w';
         this.turnText.setText('Turn: ' + (this.turn === 'w' ? 'White' : 'Black'));
-        this.selectedPiece = null;
     }
 
     update() {
